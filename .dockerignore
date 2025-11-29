@@ -1,0 +1,57 @@
+# Virtual environments
+.venv
+venv
+env
+*.env
+.env.local
+.env.*.local
+
+# Python cache
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache
+
+# Build artifacts
+dist
+build
+*.egg-info
+
+# Testing
+tests/
+.coverage
+coverage.xml
+
+# Editor directories and files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Logs
+logs
+*.log
+
+# Git
+.git/
+.gitignore
+
+# CI/CD
+.github/workflows/
+
+# Temporary files
+*.tmp
+*.temp
+.cache/
+
+# OS files
+Thumbs.db
+.DS_Store
+
+# Docker
+.dockerignore
+Dockerfile
+docker-compose.yml

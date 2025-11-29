@@ -1,0 +1,169 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  # 允许手动触发工作流
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  lint-and-test:
+    name: Code Quality Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # 获取完整历史以便更好地检测变更
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Cache uv virtual environment
+        uses: actions/cache@v4
+        with:
+          # 缓存 uv 创建的虚拟环境目录
+          path: .venv
+          # 当 uv.lock 或 pyproject.toml 文件变化时，缓存会失效
+          key: ${{ runner.os }}-uv-${{ hashFiles('**/pyproject.toml', '**/uv.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-uv-
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install uv
+          uv sync --extra dev
+
+      - name: Run isort check
+        id: isort
+        run: uv run isort app/ main.py --profile black --check-only
+
+      - name: Run Black check
+        id: black
+        run: uv run black app/ main.py --check
+
+      - name: Run Flake8 check
+        id: flake8
+        run: uv run flake8 app/ main.py --max-line-length 140
+
+      - name: Generate lint report
+        if: always()
+        run: |
+          echo "Lint results summary:"
+          echo "- isort: ${{ steps.isort.outcome }}"
+          echo "- Black: ${{ steps.black.outcome }}"
+          echo "- Flake8: ${{ steps.flake8.outcome }}"
+
+  docker-build:
+    name: Docker Build and Test
+    needs: lint-and-test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: false
+          load: true
+          tags: enana-api:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Test Docker image
+        run: |
+          # 启动容器进行测试
+          docker run -d --name enana-test -p 8000:8000 enana-api:latest
+
+          # 等待服务启动
+          sleep 10
+
+          # 打印容器的日志以进行调试
+          echo "---- Docker Container Logs ----"
+          docker logs enana-test
+          echo "-------------------------------"
+
+          # 测试API是否正常运行
+          curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/docs | grep -q 200
+          result=$?
+
+          # 清理测试容器
+          docker stop enana-test
+          docker rm enana-test
+
+          # 返回测试结果
+          exit $result
+
+  deploy:
+    name: Deploy (Manual)
+    needs: docker-build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    environment: production
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to DockerHub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Extract metadata (tags, labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ secrets.DOCKERHUB_USERNAME }}/enana-api
+          tags: |
+            type=sha,format=short
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Create GitHub Release
+        if: success() && github.ref == 'refs/heads/main'
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: v${{ github.run_number }}
+          release_name: Release v${{ github.run_number }}
+          body: |
+            What's Changed:
+            - ${{ github.event.head_commit.message }}
+
+            Automated release for commit ${{ github.sha }}
+
+            **Docker Images:**
+            - ${{ secrets.DOCKERHUB_USERNAME }}/enana-api:latest
+            - ${{ secrets.DOCKERHUB_USERNAME }}/enana-api:${{ steps.meta.outputs.version }}
+          draft: false
+          prerelease: false

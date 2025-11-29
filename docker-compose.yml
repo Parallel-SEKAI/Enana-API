@@ -1,0 +1,34 @@
+version: '3.9'
+
+services:
+  enana-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: enana-api
+    ports:
+      - "8000:8000"
+    environment:
+      - DEBUG=False
+      - LOG_LEVEL=INFO
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: '512M'
+        reservations:
+          cpus: '0.5'
+          memory: '256M'
+    networks:
+      - enana-network
+
+networks:
+  enana-network:
+    driver: bridge
